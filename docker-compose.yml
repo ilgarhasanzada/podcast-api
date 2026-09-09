@@ -1,0 +1,137 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: podcast_postgres
+    restart: unless-stopped
+    command: postgres -c max_connections=250
+    environment:
+      POSTGRES_DB: ${DB_NAME:-podcast_db}
+      POSTGRES_USER: ${DB_USER:-podcast_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-podcast_password}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-podcast_user} -d ${DB_NAME:-podcast_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: podcast_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    container_name: podcast_web
+    restart: unless-stopped
+    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=${SECRET_KEY:-django-insecure-podcast-api-secret-key-12345}
+      - ALLOWED_HOSTS=*
+      - DB_ENGINE=postgresql
+      - DB_NAME=${DB_NAME:-podcast_db}
+      - DB_USER=${DB_USER:-podcast_user}
+      - DB_PASSWORD=${DB_PASSWORD:-podcast_password}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_worker:
+    build: .
+    container_name: podcast_celery_worker
+    restart: unless-stopped
+    command: celery -A config worker --loglevel=info --concurrency=32 --max-tasks-per-child=50
+    volumes:
+      - .:/app
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=${SECRET_KEY:-django-insecure-podcast-api-secret-key-12345}
+      - DB_ENGINE=postgresql
+      - DB_NAME=${DB_NAME:-podcast_db}
+      - DB_USER=${DB_USER:-podcast_user}
+      - DB_PASSWORD=${DB_PASSWORD:-podcast_password}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_beat:
+    build: .
+    container_name: podcast_celery_beat
+    restart: unless-stopped
+    command: celery -A config beat --loglevel=info
+    volumes:
+      - .:/app
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=${SECRET_KEY:-django-insecure-podcast-api-secret-key-12345}
+      - DB_ENGINE=postgresql
+      - DB_NAME=${DB_NAME:-podcast_db}
+      - DB_USER=${DB_USER:-podcast_user}
+      - DB_PASSWORD=${DB_PASSWORD:-podcast_password}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  flower:
+    build: .
+    container_name: podcast_flower
+    restart: unless-stopped
+    command: celery -A config flower --port=5555
+    volumes:
+      - .:/app
+    ports:
+      - "5555:5555"
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=${SECRET_KEY:-django-insecure-podcast-api-secret-key-12345}
+      - FLOWER_UNAUTHENTICATED_API=true
+      - DB_ENGINE=postgresql
+      - DB_NAME=${DB_NAME:-podcast_db}
+      - DB_USER=${DB_USER:-podcast_user}
+      - DB_PASSWORD=${DB_PASSWORD:-podcast_password}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,1 @@
+"""Common reusable app module."""
